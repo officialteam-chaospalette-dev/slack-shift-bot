@@ -3,12 +3,12 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
-import datetime, re, os, logging
+import datetime, re, os, json, logging
 
-# === .env読み込み ===
+# === .env 読み込み ===
 load_dotenv()
 
-# === 設定 ===
+# === Slack / Google 設定 ===
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "officialteam@chaospalette.com")
@@ -16,11 +16,19 @@ CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "officialteam@chaospalette.com")
 app = App(token=SLACK_BOT_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
-# === Google Calendar認証 ===
-creds = Credentials.from_authorized_user_file(
-    os.getenv("GOOGLE_TOKEN_FILE", "token.json"),
-    ["https://www.googleapis.com/auth/calendar"]
-)
+# === Google Calendar 認証 ===
+# Render上では GOOGLE_TOKEN_JSON 環境変数から読み込み
+if os.getenv("GOOGLE_TOKEN_JSON"):
+    creds = Credentials.from_authorized_user_info(
+        json.loads(os.getenv("GOOGLE_TOKEN_JSON")),
+        ["https://www.googleapis.com/auth/calendar"]
+    )
+else:
+    creds = Credentials.from_authorized_user_file(
+        os.getenv("GOOGLE_TOKEN_FILE", "token.json"),
+        ["https://www.googleapis.com/auth/calendar"]
+    )
+
 service = build("calendar", "v3", credentials=creds)
 
 # === ユーザーごとの色設定 ===
@@ -45,17 +53,18 @@ def parse_shifts(text):
     return events
 
 
+# === メッセージ処理 ===
 @app.event("message")
 def handle_message(event, say):
     text = event.get("text", "")
     sender_id = event.get("user", "")
     logging.info(f"受信メッセージ: {text} from {sender_id}")
 
-    # @ユーザー指定を検出
+    # @ユーザー指定（登録対象）を検出
     mention_match = re.search(r"<@([A-Z0-9]+)>", text)
     target_user_id = mention_match.group(1) if mention_match else sender_id
 
-    # Slackユーザー名取得
+    # Slackの表示名を取得
     try:
         info = app.client.users_info(user=target_user_id)
         display_name = info["user"]["profile"].get("display_name") or info["user"]["real_name"]
@@ -99,7 +108,7 @@ def handle_message(event, say):
             say(f"<@{sender_id}> さん、{display_name} さんの削除対象の予定は見つかりませんでした。")
         return
 
-    # === 登録 ===
+    # === 通常登録 ===
     shifts = parse_shifts(text)
     if not shifts:
         say(f"<@{sender_id}> シフト形式を確認できませんでした。")
@@ -120,5 +129,6 @@ def handle_message(event, say):
     say(f"<@{sender_id}> さん、{display_name} さんのシフトを {len(shifts)} 件 登録しました。")
 
 
+# === メイン起動 ===
 if __name__ == "__main__":
     SocketModeHandler(app, SLACK_APP_TOKEN).start()
