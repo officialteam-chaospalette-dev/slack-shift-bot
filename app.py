@@ -17,13 +17,14 @@ app = App(token=SLACK_BOT_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 # === Google Calendar 認証 ===
-# Render上では GOOGLE_TOKEN_JSON 環境変数から読み込み
 if os.getenv("GOOGLE_TOKEN_JSON"):
+    # Renderなど環境変数から直接読み込み
     creds = Credentials.from_authorized_user_info(
         json.loads(os.getenv("GOOGLE_TOKEN_JSON")),
         ["https://www.googleapis.com/auth/calendar"]
     )
 else:
+    # ローカルでのtoken.json利用
     creds = Credentials.from_authorized_user_file(
         os.getenv("GOOGLE_TOKEN_FILE", "token.json"),
         ["https://www.googleapis.com/auth/calendar"]
