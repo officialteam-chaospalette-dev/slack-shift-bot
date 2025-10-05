@@ -2,19 +2,24 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from dotenv import load_dotenv
 import datetime, re, os, logging
 
+# === .env読み込み ===
+load_dotenv()
+
 # === 設定 ===
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
-CALENDAR_ID = "officialteam@chaospalette.com"
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
+CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "officialteam@chaospalette.com")
 
 app = App(token=SLACK_BOT_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 # === Google Calendar認証 ===
 creds = Credentials.from_authorized_user_file(
-    "token.json", ["https://www.googleapis.com/auth/calendar"]
+    os.getenv("GOOGLE_TOKEN_FILE", "token.json"),
+    ["https://www.googleapis.com/auth/calendar"]
 )
 service = build("calendar", "v3", credentials=creds)
 
@@ -59,7 +64,6 @@ def handle_message(event, say):
 
     # === 削除コマンド ===
     if "削除" in text:
-        # すべての日付（10/06 10/07 ...）を抽出
         delete_matches = re.findall(r"(\d{1,2})/(\d{1,2})", text)
         if not delete_matches:
             say(f"<@{sender_id}> 削除する日付が見つかりませんでした。")
@@ -82,13 +86,10 @@ def handle_message(event, say):
             ).execute()
 
             events = events_result.get("items", [])
-            deleted_count = 0
-
             for e in events:
                 summary = e.get("summary", "")
                 if display_name in summary:
                     service.events().delete(calendarId=CALENDAR_ID, eventId=e["id"]).execute()
-                    deleted_count += 1
                     total_deleted += 1
                     logging.info(f"削除: {summary}")
 
@@ -98,7 +99,7 @@ def handle_message(event, say):
             say(f"<@{sender_id}> さん、{display_name} さんの削除対象の予定は見つかりませんでした。")
         return
 
-    # === 通常の登録 ===
+    # === 登録 ===
     shifts = parse_shifts(text)
     if not shifts:
         say(f"<@{sender_id}> シフト形式を確認できませんでした。")
