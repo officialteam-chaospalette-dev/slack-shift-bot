@@ -1,0 +1,123 @@
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+import datetime, re, os, logging
+
+# === 設定 ===
+SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
+CALENDAR_ID = "officialteam@chaospalette.com"
+
+app = App(token=SLACK_BOT_TOKEN)
+logging.basicConfig(level=logging.INFO)
+
+# === Google Calendar認証 ===
+creds = Credentials.from_authorized_user_file(
+    "token.json", ["https://www.googleapis.com/auth/calendar"]
+)
+service = build("calendar", "v3", credentials=creds)
+
+# === ユーザーごとの色設定 ===
+USER_COLORS = {
+    "U09K6QUEP0R": ("1", "[青]"),
+    "U09K6QPLZEV": ("5", "[黄]"),
+    "U09JM6U4RNF": ("4", "[赤]"),
+    "U09K4EMTX17": ("2", "[緑]"),
+}
+
+# === シフト形式の抽出 ===
+def parse_shifts(text):
+    pattern = r"(\d{1,2})/(\d{1,2}).*?(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})"
+    matches = re.findall(pattern, text)
+    events = []
+    current_year = datetime.datetime.now().year
+    for m in matches:
+        month, day, sh, sm, eh, em = map(int, m)
+        start = datetime.datetime(current_year, month, day, sh, sm)
+        end = datetime.datetime(current_year, month, day, eh, em)
+        events.append((start, end))
+    return events
+
+
+@app.event("message")
+def handle_message(event, say):
+    text = event.get("text", "")
+    sender_id = event.get("user", "")
+    logging.info(f"受信メッセージ: {text} from {sender_id}")
+
+    # @ユーザー指定を検出
+    mention_match = re.search(r"<@([A-Z0-9]+)>", text)
+    target_user_id = mention_match.group(1) if mention_match else sender_id
+
+    # Slackユーザー名取得
+    try:
+        info = app.client.users_info(user=target_user_id)
+        display_name = info["user"]["profile"].get("display_name") or info["user"]["real_name"]
+    except Exception:
+        display_name = f"User_{target_user_id}"
+
+    # === 削除コマンド ===
+    if "削除" in text:
+        # すべての日付（10/06 10/07 ...）を抽出
+        delete_matches = re.findall(r"(\d{1,2})/(\d{1,2})", text)
+        if not delete_matches:
+            say(f"<@{sender_id}> 削除する日付が見つかりませんでした。")
+            return
+
+        current_year = datetime.datetime.now().year
+        total_deleted = 0
+
+        for month, day in delete_matches:
+            month, day = int(month), int(day)
+            start_day = datetime.datetime(current_year, month, day, 0, 0)
+            end_day = start_day + datetime.timedelta(days=1)
+
+            events_result = service.events().list(
+                calendarId=CALENDAR_ID,
+                timeMin=start_day.isoformat() + "Z",
+                timeMax=end_day.isoformat() + "Z",
+                singleEvents=True,
+                orderBy="startTime"
+            ).execute()
+
+            events = events_result.get("items", [])
+            deleted_count = 0
+
+            for e in events:
+                summary = e.get("summary", "")
+                if display_name in summary:
+                    service.events().delete(calendarId=CALENDAR_ID, eventId=e["id"]).execute()
+                    deleted_count += 1
+                    total_deleted += 1
+                    logging.info(f"削除: {summary}")
+
+        if total_deleted > 0:
+            say(f"<@{sender_id}> さん、{display_name} さんの予定を {total_deleted} 件削除しました。")
+        else:
+            say(f"<@{sender_id}> さん、{display_name} さんの削除対象の予定は見つかりませんでした。")
+        return
+
+    # === 通常の登録 ===
+    shifts = parse_shifts(text)
+    if not shifts:
+        say(f"<@{sender_id}> シフト形式を確認できませんでした。")
+        return
+
+    color_id, label = USER_COLORS.get(target_user_id, ("1", "[青]"))
+    for start, end in shifts:
+        event_body = {
+            "summary": f"シフト（{display_name}）",
+            "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Tokyo"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Tokyo"},
+            "colorId": color_id,
+            "description": f"Slack連携Bot登録 colorId={color_id}",
+        }
+        event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
+        logging.info(f"登録完了: {event.get('summary')} color={color_id}")
+
+    say(f"<@{sender_id}> さん、{display_name} さんのシフトを {len(shifts)} 件 登録しました。")
+
+
+if __name__ == "__main__":
+    SocketModeHandler(app, SLACK_APP_TOKEN).start()
