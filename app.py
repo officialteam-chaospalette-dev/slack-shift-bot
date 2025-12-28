@@ -45,11 +45,15 @@ def parse_shifts(text):
     pattern = r"(\d{1,2})/(\d{1,2}).*?(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})"
     matches = re.findall(pattern, text)
     events = []
-    current_year = datetime.datetime.now().year
+    now = datetime.datetime.now()
+    current_year = now.year
+    current_month = now.month
     for m in matches:
         month, day, sh, sm, eh, em = map(int, m)
-        start = datetime.datetime(current_year, month, day, sh, sm)
-        end = datetime.datetime(current_year, month, day, eh, em)
+        # 入力された月が現在の月より小さい場合は翌年として扱う
+        year = current_year + 1 if month < current_month else current_year
+        start = datetime.datetime(year, month, day, sh, sm)
+        end = datetime.datetime(year, month, day, eh, em)
         events.append((start, end))
     return events
 
@@ -79,12 +83,16 @@ def handle_message(event, say):
             say(f"<@{sender_id}> 削除する日付が見つかりませんでした。")
             return
 
-        current_year = datetime.datetime.now().year
+        now = datetime.datetime.now()
+        current_year = now.year
+        current_month = now.month
         total_deleted = 0
 
         for month, day in delete_matches:
             month, day = int(month), int(day)
-            start_day = datetime.datetime(current_year, month, day, 0, 0)
+            # 入力された月が現在の月より小さい場合は翌年として扱う
+            year = current_year + 1 if month < current_month else current_year
+            start_day = datetime.datetime(year, month, day, 0, 0)
             end_day = start_day + datetime.timedelta(days=1)
 
             events_result = service.events().list(
